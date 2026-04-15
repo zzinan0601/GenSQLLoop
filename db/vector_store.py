@@ -1,5 +1,7 @@
-from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import OllamaEmbeddings
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
 
 # 임베딩 모델 설정 (Ollama 로컬 임베딩)
 embeddings = OllamaEmbeddings(
@@ -7,8 +9,12 @@ embeddings = OllamaEmbeddings(
     base_url = "http://localhost:11434",
 )
 
-# 벡터DB 경로 (로컬 저장)
-VECTOR_DB_PATH = "./chroma_schema_db"
+# Qdrant 설정
+QDRANT_HOST       = "localhost"
+QDRANT_PORT       = 6333
+COLLECTION_NAME   = "schema_store"
+EMBEDDING_DIM     = 768   # nomic-embed-text 기본 차원
+
 
 # ── 스키마 저장 (최초 1회 실행) ────────────────────────
 def save_schemas(schema_list: list[dict]):
@@ -23,22 +29,32 @@ def save_schemas(schema_list: list[dict]):
         ...
     ]
     """
-    texts    = []
+    client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+
+    # 컬렉션 없으면 생성
+    existing = [c.name for c in client.get_collections().collections]
+    if COLLECTION_NAME not in existing:
+        client.create_collection(
+            collection_name = COLLECTION_NAME,
+            vectors_config  = VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+        )
+        print(f"[벡터DB] 컬렉션 '{COLLECTION_NAME}' 생성")
+
+    texts     = []
     metadatas = []
 
     for schema in schema_list:
-        # 검색에 활용할 텍스트 (테이블명 + 설명 + DDL)
         text = f"테이블명: {schema['table_name']}\n설명: {schema['description']}\n{schema['ddl']}"
         texts.append(text)
         metadatas.append({"table_name": schema["table_name"]})
 
-    db = Chroma.from_texts(
-        texts      = texts,
-        embedding  = embeddings,
-        metadatas  = metadatas,
-        persist_directory = VECTOR_DB_PATH,
+    QdrantVectorStore.from_texts(
+        texts           = texts,
+        embedding       = embeddings,
+        metadatas       = metadatas,
+        url             = f"http://{QDRANT_HOST}:{QDRANT_PORT}",
+        collection_name = COLLECTION_NAME,
     )
-    db.persist()
     print(f"[벡터DB] {len(texts)}개 테이블 스키마 저장 완료")
 
 
@@ -47,9 +63,10 @@ def retrieve_schema(question: str, top_k: int = 3) -> str:
     """
     질문과 관련된 상위 top_k개 테이블 스키마 반환
     """
-    db = Chroma(
-        persist_directory = VECTOR_DB_PATH,
-        embedding_function = embeddings,
+    db = QdrantVectorStore.from_existing_collection(
+        embedding       = embeddings,
+        url             = f"http://{QDRANT_HOST}:{QDRANT_PORT}",
+        collection_name = COLLECTION_NAME,
     )
 
     docs = db.similarity_search(question, k=top_k)
