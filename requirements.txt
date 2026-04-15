@@ -2,5 +2,7 @@ langchain
 langgraph
 langchain-ollama
 langchain-community
-chromadb
+langchain-qdrant
+qdrant-client
 sqlalchemy
+psycopg2-binary
